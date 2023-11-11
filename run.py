@@ -9,20 +9,16 @@ from google.cloud.sql.connector import Connector, IPTypes
 import sqlalchemy
 from transformers import AutoModel, AutoTokenizer
 from vertexai.preview.language_models import ChatModel, InputOutputTextPair, ChatMessage
-# TextGenerationModel, InputOutputTextPair, TextEmbeddingModel
 
 class test :
     def __init__(self):
         return
 
     def service(self, query_text):
-        # PROJECT_ID = "esoteric-stream-399606"
-        # LOCATION = "us-central1"
         PROJECT_ID = "valiant-imagery-399603"
         LOCATION = "asia-northeast3"
         vertexai.init(project=PROJECT_ID, location=LOCATION)
 
-        # word embedding을 위한 함수
         def get_KoSimCSE():
             model = AutoModel.from_pretrained('BM-K/KoSimCSE-roberta-multitask')
             tokenizer = AutoTokenizer.from_pretrained('BM-K/KoSimCSE-roberta-multitask')
@@ -31,17 +27,11 @@ class test :
 
         model, tokenizer = get_KoSimCSE()
 
-        # VectorDB 연결
-        # instance_connection_name = "esoteric-stream-399606:asia-northeast3:wjdfoek3"
-        # db_user = "postgres"
-        # db_pass = "pgvectorwjdfo"
-        # db_name = "pgvector"
         instance_connection_name = "valiant-imagery-399603:asia-northeast3:lecturetest"
         db_user = "postgres"
         db_pass = "porsche911gt3"
         db_name = "postgres"
 
-        # initialize Cloud SQL Python Connector object
         connector = Connector()
 
         def getconn() -> pg8000.dbapi.Connection:
@@ -69,9 +59,7 @@ class test :
         db_conn.commit()
 
         history = []
-
-
-        chat_model = ChatModel.from_pretrained("chat-bison@001")  #chat model 불러오기
+        chat_model = ChatModel.from_pretrained("chat-bison@001") 
 
         chat = chat_model.start_chat(
             context="수업에 대해 궁금해하는 학생들이 과목, 교수에 대해 질문하는 서비스야. 강의평과 관련된 질문이면 질문 내용에 질문을 출력해주고 아니면 그냥 NULL을 출력해줘",
@@ -103,13 +91,12 @@ class test :
             top_k=1
         )
 
-        #LLM에게 질문해서 user의 input으로부터 과목, 교수명 가져오기
         key_query = chat.send_message(query_text+"에서 과목명, 교수명, 질문 내용이 뭐야?").text
 
         if key_query == "NULL" :
             print("강의평과 관련된 내용을 입력하세요.")
 
-        def extract(q): #LLM의 output으로부터 prof name, lecture name 추출
+        def extract(q):
             lec = q.find("과목명")
             prof = q.find("교수명")
             q_start = q.find("질문 내용")
@@ -129,10 +116,10 @@ class test :
         embedding_str = ",".join(str(x) for x in embedding_arr)
         embedding_str = "["+embedding_str+"]"
 
-        if lec != None and prof != None :    #User의 질문 유형에 맞게 쿼리문 짜줌
+        if lec != None and prof != None :
             insert_stat, param = (sqlalchemy.text(
                         """SELECT origin_text, rating, assignment, team, grade, attendance, test FROM PROFNLEC WHERE INFO LIKE :information
-                        ORDER BY v <-> :query_vec LIMIT 20"""   # <-> : L2 Distance,  <=> : Cosine Distance, <#> : inner product (음수 값을 return)
+                        ORDER BY v <-> :query_vec LIMIT 20"""
             ), {"information": f'%{lec}%{prof}%', "query_vec": embedding_str})
         elif lec != None :
             insert_stat, param = sqlalchemy.text(
@@ -145,12 +132,11 @@ class test :
                         ORDER BY v <-> :query_vec LIMIT 20"""
             ), {"professor": f'%{prof}%', "query_vec": embedding_str}
 
-        with pool.connect() as db_conn: # 쿼리 실행문
+        with pool.connect() as db_conn:
             result = db_conn.execute(
                 insert_stat, parameters = param
             ).fetchall()
 
-        #query 결과를 문자열로 바꾸기 <- Context에는 문자열만 들어갈 수 있음
         articles = ""
         for res in result :
             articles += res[0]
