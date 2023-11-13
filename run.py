@@ -2,6 +2,7 @@ import os
 path = '/Users/shin/Downloads/valiant-imagery-399603-80f2300bb884.json'
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = path
 
+import os
 import sys
 import vertexai
 import pg8000
@@ -9,29 +10,42 @@ from google.cloud.sql.connector import Connector, IPTypes
 import sqlalchemy
 from transformers import AutoModel, AutoTokenizer
 from vertexai.preview.language_models import ChatModel, InputOutputTextPair, ChatMessage
+# TextGenerationModel, InputOutputTextPair, TextEmbeddingModel
+
+current_directory = os.getcwd()
+path = current_directory + '/esoteric-stream-399606-6993766aaeea.json'
+print(path)
+try :
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = path
+    print("Api connected")
+except :
+    print("Api connect fail : Could not found api key file.")
+    sys.exit()
 
 class test :
     def __init__(self):
-        return
+        self.history = []
+        PROJECT_ID = "esoteric-stream-399606"
+        LOCATION = "us-central1"
 
-    def service(self, query_text):
-        PROJECT_ID = "valiant-imagery-399603"
-        LOCATION = "asia-northeast3"
         vertexai.init(project=PROJECT_ID, location=LOCATION)
 
+        # word embedding을 위한 함수
         def get_KoSimCSE():
             model = AutoModel.from_pretrained('BM-K/KoSimCSE-roberta-multitask')
             tokenizer = AutoTokenizer.from_pretrained('BM-K/KoSimCSE-roberta-multitask')
 
             return model, tokenizer
 
-        model, tokenizer = get_KoSimCSE()
+        self.model, self.tokenizer = get_KoSimCSE()
 
-        instance_connection_name = "valiant-imagery-399603:asia-northeast3:lecturetest"
+        # VectorDB 연결
+        instance_connection_name = "esoteric-stream-399606:asia-northeast3:wjdfoek3"
         db_user = "postgres"
-        db_pass = "porsche911gt3"
-        db_name = "postgres"
+        db_pass = "pgvectorwjdfo"
+        db_name = "pgvector"
 
+        # initialize Cloud SQL Python Connector object
         connector = Connector()
 
         def getconn() -> pg8000.dbapi.Connection:
@@ -45,107 +59,48 @@ class test :
             )
             return conn
 
-        pool = sqlalchemy.create_engine(
+        self.pool = sqlalchemy.create_engine(
             "postgresql+pg8000://",
             creator=getconn,
         )
+        return
 
-        with pool.connect() as db_conn:
-            db_conn.execute(
-            sqlalchemy.text(
-                "CREATE EXTENSION IF NOT EXISTS vector with schema public"
-            )
-        )
-        db_conn.commit()
+    def service(self, query_text):
+        chat_model = ChatModel.from_pretrained("chat-bison@001")  #chat model 불러오기
 
-        history = []
-        chat_model = ChatModel.from_pretrained("chat-bison@001") 
+        inputs = self.tokenizer(query_text, padding=True, truncation=True, return_tensors="pt")
 
-        chat = chat_model.start_chat(
-            context="수업에 대해 궁금해하는 학생들이 과목, 교수에 대해 질문하는 서비스야. 강의평과 관련된 질문이면 질문 내용에 질문을 출력해주고 아니면 그냥 NULL을 출력해줘",
-            examples=[
-                InputOutputTextPair(
-                    input_text="정기숙 교수님 자료구조응용 수업 어때?에서 과목명, 교수명, 질문 내용이 뭐야?",
-                    output_text="과목명 자료구조응용 교수명 정기숙 질문 내용 수업이 어떤지 물어보는 내용",
-                ),
-                InputOutputTextPair(
-                    input_text="정기숙 교수님 어때?에서 과목명, 교수명, 질문내용이 뭐야?",
-                    output_text="과목명 NULL 교수명 정기숙 질문 내용 교수님이 어떤지 물어보는 내용",
-                ),
-                InputOutputTextPair(
-                    input_text="자료구조응용 수업 어때?에서 과목명, 교수명, 질문내용이 뭐야?",
-                    output_text="과목명 자료구조응용 교수명 NULL 질문 내용 수업이 어떤지 물어보는 내용",
-                ),
-                InputOutputTextPair(
-                    input_text="과제 어떻고 수업 어때?에서 과목명, 교수명, 질문 내용이 뭐야?",
-                    output_text="질문 내용 과제가 어떻고 수업이 어떤지 물어보는 내용",
-                ),
-                InputOutputTextPair(
-                    input_text="강의평과 관련 없는 질문",
-                    output_text="NULL",
-                ),
-            ],
-            temperature=0.0,
-            max_output_tokens=1024,
-            top_p=0.8,
-            top_k=1
-        )
-
-        key_query = chat.send_message(query_text+"에서 과목명, 교수명, 질문 내용이 뭐야?").text
-
-        if key_query == "NULL" :
-            print("강의평과 관련된 내용을 입력하세요.")
-
-        def extract(q):
-            lec = q.find("과목명")
-            prof = q.find("교수명")
-            q_start = q.find("질문 내용")
-
-            lecture = q[lec+4:prof-1]
-            professor = q[prof+4:]
-            query = q[q_start+6:]
-            if lecture == "NULL" : lecture = None
-            if professor == "NULL" : professor = None
-            return lecture, professor, query
-
-        lec, prof, query = extract(key_query)
-        inputs = tokenizer(query, padding=True, truncation=True, return_tensors="pt")
-
-        embeddings, _ = model(**inputs, return_dict=False)
+        embeddings, _ = self.model(**inputs, return_dict=False)
         embedding_arr = embeddings[0][0].detach().numpy()
         embedding_str = ",".join(str(x) for x in embedding_arr)
         embedding_str = "["+embedding_str+"]"
 
-        if lec != None and prof != None :
-            insert_stat, param = (sqlalchemy.text(
-                        """SELECT origin_text, rating, assignment, team, grade, attendance, test FROM PROFNLEC WHERE INFO LIKE :information
-                        ORDER BY v <-> :query_vec LIMIT 20"""
-            ), {"information": f'%{lec}%{prof}%', "query_vec": embedding_str})
-        elif lec != None :
-            insert_stat, param = sqlalchemy.text(
-                        """SELECT origin_text, rating, assignment, team, grade, attendance, test FROM PROFNLEC WHERE INFO LIKE :lecture
-                        ORDER BY v <-> :query_vec LIMIT 20"""
-            ), {"lecture": f'%{lec}%', "query_vec": embedding_str}
-        elif prof != None :
-            insert_stat, param = sqlalchemy.text(
-                        """SELECT origin_text, rating, assignment, team, grade, attendance, test FROM PROFNLEC WHERE INFO LIKE :professor
-                        ORDER BY v <-> :query_vec LIMIT 20"""
-            ), {"professor": f'%{prof}%', "query_vec": embedding_str}
+        insert_stat, param = sqlalchemy.text(
+                    """SELECT info, related, insist, content, close FROM minsa
+                    ORDER BY v <=> :query_vec LIMIT 1"""
+        ), {"query_vec": embedding_str}
 
-        with pool.connect() as db_conn:
+        with self.pool.connect() as db_conn: # 쿼리 실행문
             result = db_conn.execute(
                 insert_stat, parameters = param
             ).fetchall()
 
-        articles = ""
-        for res in result :
-            articles += res[0]
+        print(result)
+        #query 결과를 문자열로 바꾸기 <- Context에는 문자열만 들어갈 수 있음
+        judge = ""
+        info = ["판례명", "관련 법령", "주장", "내용", "판결문"]
+        for i in range(len(result)) :
+            for j in range(len(result[i])) :
+                judge += info[j] + result[i][j]
+                judge += " "
+
+        print(judge)
 
         chat_model = ChatModel.from_pretrained("chat-bison@001")
 
         output_chat = chat_model.start_chat(
-            context="강의를 찾는 대학생들에게 강의평들을 토대로 수업이 어떤지 알려주는 서비스야, 주어진 강의평들을 요약해서 학생들에게 알려줘" + articles + "강의평을 가져올 때는 있는 그대로 가져오지 말고 나름대로 요약해서 알려주고 공손하게 알려줘",
-            message_history = history,
+            context="법률 자문을 구하는 사용자들에게 기존의 판례들에 기반해 답변해주는 서비스야 주어진 판례를 보고 요약해서 사용자의 상황에 어떻게 적용해야할 지 답변해주거나 사용자의 질문에 맞는 답변을 해줘 판례 : " +judge,
+            message_history = self.history,
             temperature=0.3,
             max_output_tokens=1024,
             top_p=0.8,
@@ -153,9 +108,8 @@ class test :
         )
 
         output = output_chat.send_message(query_text).text
-
-        history.append(ChatMessage(content = query_text, author = "user"))
-        history.append(ChatMessage(content = output, author = "bot"))
+        self.history.append(ChatMessage(content = query_text, author = "user"))
+        self.history.append(ChatMessage(content = output, author = "bot"))
 
         return output
 
